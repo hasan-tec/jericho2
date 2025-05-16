@@ -37,7 +37,7 @@ export default function AuthForm() {
           setLoading(false);
           return;
         }
-        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+        const { error: signUpError } = await supabase.auth.signUp({
           email,
           password,
           options: {
@@ -51,16 +51,22 @@ export default function AuthForm() {
         setMessage('Account created! Check your email for the confirmation link.');
 
       } else {
-        const { data, error: signInError } = await supabase.auth.signInWithPassword({
+        const { error: signInError } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
         if (signInError) throw signInError;
         setMessage('Logged in successfully! You will be redirected shortly.');
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Authentication error:', err);
-      setError(err.error_description || err.message);
+      if (err instanceof Error) {
+        setError(err.message);
+      } else if (typeof err === 'object' && err !== null && 'message' in err) {
+        setError(String((err as { message: string }).message));
+      } else {
+        setError('An unexpected error occurred.');
+      }
     } finally {
       setLoading(false);
     }

@@ -99,9 +99,13 @@ export default function TaskList() {
         if (profilesError) throw profilesError;
         setProfiles(profilesData || []);
 
-      } catch (e: any) {
-        setError(e.message);
+      } catch (e: unknown) { // Changed any to unknown
         console.error("Error fetching data:", e);
+        if (e instanceof Error) {
+          setError(e.message);
+        } else {
+          setError("An unexpected error occurred while fetching data.");
+        }
       } finally {
         setLoading(false);
       }
@@ -115,7 +119,7 @@ export default function TaskList() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'tasks' },
-        (payload) => {
+        (/*payload*/) => { // payload commented out
           fetchTasksAndProfiles(); // Re-fetch both tasks and profiles on task change
         }
       )
@@ -127,7 +131,7 @@ export default function TaskList() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'profiles' },
-        (payload) => {
+        (/*payload*/) => { // payload commented out
           fetchTasksAndProfiles(); // Re-fetch both tasks and profiles on profile change
         }
       )

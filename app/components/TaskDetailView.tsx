@@ -11,7 +11,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, AlertCircle, Edit, Save, XCircle, ArrowLeft, UserCircle, CalendarDays, Tag } from 'lucide-react';
-import Link from 'next/link';
 
 interface Task {
   id: string;
@@ -89,9 +88,9 @@ export default function TaskDetailView({ taskId }: TaskDetailViewProps) {
         const newProfileMap = new Map((profilesData || []).map(p => [p.id, p]));
         setProfileMap(newProfileMap);
 
-      } catch (e: any) {
-        setError(e.message);
-        console.error("Error fetching data:", e);
+      } catch (err: unknown) { // Changed any to unknown
+        setError(err instanceof Error ? err.message : "Error fetching data.");
+        console.error("Error fetching data:", err);
       } finally {
         setLoading(false);
         setLoadingProfiles(false);
@@ -125,9 +124,9 @@ export default function TaskDetailView({ taskId }: TaskDetailViewProps) {
       
       setTask(prevTask => prevTask ? { ...prevTask, ...updatedData } : null);
       setIsEditing(false);
-    } catch (e: any) {
-      setError(e.message);
-      console.error("Error updating task:", e);
+    } catch (err: unknown) { // Changed any to unknown
+      setError(err instanceof Error ? err.message : "Error updating task.");
+      console.error("Error updating task:", err);
     } finally {
       setSubmitting(false);
     }

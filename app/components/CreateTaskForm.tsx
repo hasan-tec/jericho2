@@ -18,7 +18,6 @@ import {
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -61,8 +60,8 @@ export default function CreateTaskForm() {
 
         if (profilesError) throw profilesError;
         setProfiles(data || []);
-      } catch (e: any) {
-        console.error("Error fetching profiles:", e);
+      } catch (err: unknown) {
+        console.error("Error fetching profiles:", err);
       } finally {
         setLoadingProfiles(false);
       }
@@ -92,9 +91,15 @@ export default function CreateTaskForm() {
         throw insertError;
       }
       router.push('/tasks');
-    } catch (e: any) {
-      setError(e.message);
-      console.error("Error submitting task:", e);
+    } catch (err: unknown) {
+      console.error("Error submitting task:", err);
+      if (err instanceof Error) {
+        setError(err.message);
+      } else if (typeof err === 'object' && err !== null && 'message' in err) {
+        setError(String((err as { message: string }).message));
+      } else {
+        setError('An unexpected error occurred while creating the task.');
+      }
     } finally {
       setSubmitting(false);
     }

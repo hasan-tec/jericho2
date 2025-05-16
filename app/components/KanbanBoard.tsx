@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react'; // Added useCallback
 import { supabase } from '@/lib/supabaseClient';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd'; // Using a well-maintained fork
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"; // Added CardDescription
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"; // Removed CardDescription
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { PlusCircle, GripVertical, Loader2, AlertCircle, Bug, CheckSquare, Bookmark } from 'lucide-react'; // Added Bug, CheckSquare, Bookmark for task types
@@ -12,14 +12,13 @@ import { Button } from '@/components/ui/button';
 
 interface Task {
   id: string;
-  created_at: string;
-  updated_at: string;
   title: string;
-  description: string | null;
-  type: 'Bug' | 'Feature' | 'Task';
-  assignee: string | null; // For now, just a name. Later, could be a user ID.
-  status: 'To Do' | 'In Progress' | 'Done';
-  order: number; // To maintain order within columns
+  status: string;
+  assignee?: string | null; // Make assignee optional and allow null
+  description?: string;
+  type?: string;
+  order: number;
+  profile?: { full_name?: string | null; avatar_url?: string | null } | null; // Nested profile type
 }
 
 interface Profile {
@@ -27,37 +26,6 @@ interface Profile {
   full_name: string | null;
   avatar_url: string | null;
 }
-
-interface TaskUpdate {
-  id: string;
-  order: number;
-  status: Task['status'];
-  updated_at: string;
-}
-
-interface Column {
-  id: 'To Do' | 'In Progress' | 'Done';
-  title: string;
-  tasks: Task[];
-}
-
-const initialColumns: Record<'To Do' | 'In Progress' | 'Done', Column> = {
-  'To Do': {
-    id: 'To Do',
-    title: 'To Do',
-    tasks: [],
-  },
-  'In Progress': {
-    id: 'In Progress',
-    title: 'In Progress',
-    tasks: [],
-  },
-  'Done': {
-    id: 'Done',
-    title: 'Done',
-    tasks: [],
-  },
-};
 
 // Helper to get initials for avatar
 const getInitials = (name: string | null | undefined): string => {
@@ -81,8 +49,8 @@ const getTypeIcon = (type: Task['type']) => {
 };
 
 export default function KanbanBoard() {
-  const [columns, setColumns] = useState<Record<'To Do' | 'In Progress' | 'Done', Column>>(initialColumns);
-  const [profiles, setProfiles] = useState<Profile[]>([]); // State for profiles
+  const [tasks, setTasks] = useState<Record<string, Task[]>>({});
+  const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isClient, setIsClient] = useState(false);
@@ -91,11 +59,10 @@ export default function KanbanBoard() {
     setIsClient(true); // Ensure DND only runs on client
   }, []);
 
-  const fetchTasksAndProfiles = async () => { // Renamed for clarity
+  const fetchTasks = useCallback(async () => { // Wrapped in useCallback
     setLoading(true);
     setError(null);
     try {
-      // Fetch tasks
       const { data: tasksData, error: tasksError } = await supabase
         .from('tasks')
         .select('*')
@@ -103,182 +70,131 @@ export default function KanbanBoard() {
 
       if (tasksError) throw tasksError;
 
-      // Fetch profiles
-      const { data: profilesData, error: profilesError } = await supabase
-        .from('profiles')
-        .select('id, full_name, avatar_url');
-      
-      if (profilesError) throw profilesError;
-      setProfiles(profilesData || []);
-
-      const newColumns = { ...initialColumns };
-      newColumns['To Do'] = { ...newColumns['To Do'], tasks: [] };
-      newColumns['In Progress'] = { ...newColumns['In Progress'], tasks: [] };
-      newColumns['Done'] = { ...newColumns['Done'], tasks: [] };
-
+      const newTasks: Record<string, Task[]> = {};
       (tasksData || []).forEach((task: Task) => {
-        if (task.status && newColumns[task.status]) {
-          newColumns[task.status].tasks.push(task);
+        if (!newTasks[task.status]) {
+          newTasks[task.status] = [];
         }
-      });
-      
-      Object.values(newColumns).forEach(column => {
-        column.tasks.sort((a, b) => a.order - b.order);
+        newTasks[task.status].push(task);
       });
 
-      setColumns(newColumns);
-    } catch (e: any) {
-      setError(e.message);
-      console.error("Error fetching data:", e);
+      Object.keys(newTasks).forEach(status => {
+        newTasks[status].sort((a, b) => a.order - b.order);
+      });
+
+      setTasks(newTasks);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'An unexpected error occurred.');
+      console.error("Error fetching tasks:", e);
     } finally {
       setLoading(false);
     }
-  };
+  }, []); // Added dependency array for useCallback
+
+  const fetchUsers = useCallback(async () => { // Wrapped in useCallback
+    try {
+      const { data: profilesData, error: profilesError } = await supabase
+        .from('profiles')
+        .select('id, full_name, avatar_url');
+
+      if (profilesError) throw profilesError;
+
+      setProfiles(profilesData || []);
+    } catch (e: unknown) {
+      console.error("Error fetching profiles:", e);
+    }
+  }, []); // Added dependency array for useCallback
 
   useEffect(() => {
-    fetchTasksAndProfiles(); // Call the combined fetch function
-
-    const taskChannel = supabase
+    const tasksChannel = supabase
       .channel('tasks-board-changes')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'tasks' },
-        (payload) => {
-          fetchTasksAndProfiles(); // Re-fetch both tasks and profiles
+        () => {
+          fetchTasks();
         }
       )
       .subscribe();
 
-    const profileChannel = supabase
-      .channel('profiles-board-changes')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'profiles' },
-        (payload) => {
-          fetchTasksAndProfiles(); // Re-fetch both tasks and profiles
-        }
-      )
-      .subscribe();
+    // Fetch initial tasks
+    fetchTasks();
+    fetchUsers();
 
     return () => {
-      supabase.removeChannel(taskChannel);
-      supabase.removeChannel(profileChannel);
+      supabase.removeChannel(tasksChannel);
     };
-  }, []);
+  }, [fetchTasks, fetchUsers]);
 
   const onDragEnd = async (result: DropResult) => {
     const { source, destination, draggableId } = result;
 
     if (!destination) return;
 
+    // If dropped in the same place
     if (source.droppableId === destination.droppableId && source.index === destination.index) {
-      return; // Item dropped in the same place
+      return;
     }
 
-    const startColumn = columns[source.droppableId as keyof typeof columns];
-    const endColumn = columns[destination.droppableId as keyof typeof columns];
-    const draggedTask = startColumn.tasks.find(task => task.id === draggableId);
+    const startColumnStatus = source.droppableId;
+    const endColumnStatus = destination.droppableId;
 
-    if (!draggedTask) return;
+    const startTasks = Array.from(tasks[startColumnStatus] || []);
+    const [movedTask] = startTasks.splice(source.index, 1);
 
-    // Optimistic UI Update
-    const newStartTasks = Array.from(startColumn.tasks);
-    newStartTasks.splice(source.index, 1);
+    // Optimistic update for UI
+    const newTasksState = { ...tasks };
+    newTasksState[startColumnStatus] = startTasks;
 
-    const newEndTasks = Array.from(endColumn.tasks);
-    if (source.droppableId === destination.droppableId) {
-      // Moving within the same column
-      newEndTasks.splice(destination.index, 0, draggedTask);
+    if (startColumnStatus === endColumnStatus) {
+      // Moved within the same column
+      startTasks.splice(destination.index, 0, movedTask);
+      newTasksState[startColumnStatus] = startTasks.map((task, index) => ({ ...task, order: index }));
     } else {
-      // Moving to a different column
-      draggedTask.status = destination.droppableId as Task['status']; // Update status
-      newEndTasks.splice(destination.index, 0, draggedTask);
+      // Moved to a different column
+      const endTasks = Array.from(tasks[endColumnStatus] || []);
+      endTasks.splice(destination.index, 0, { ...movedTask, status: endColumnStatus });
+      newTasksState[endColumnStatus] = endTasks.map((task, index) => ({ ...task, order: index }));
+      // Update order for source column as well
+      newTasksState[startColumnStatus] = startTasks.map((task, index) => ({ ...task, order: index }));
     }
-    
-    // Update order for all affected tasks
-    const updateTaskOrder = (tasks: Task[], columnId: string) => {
-      return tasks.map((task, index) => ({ ...task, order: index, status: columnId as Task['status'] }));
-    };
+    setTasks(newTasksState);
 
-    const updatedStartTasks = updateTaskOrder(newStartTasks, startColumn.id);
-    const updatedEndTasks = source.droppableId === destination.droppableId ? updatedStartTasks : updateTaskOrder(newEndTasks, endColumn.id);
-
-    const newColumnsState = {
-      ...columns,
-      [startColumn.id]: {
-        ...startColumn,
-        tasks: updatedStartTasks,
-      },
-      [endColumn.id]: {
-        ...endColumn,
-        tasks: updatedEndTasks,
-      },
-    };
-    setColumns(newColumnsState);
-
-    // Persist changes to Supabase
+    // Update database
     try {
-      const now = new Date().toISOString();
-      const finalTasksToUpsert: Task[] = [];
-      const affectedTaskIds = new Set<string>();
+      if (startColumnStatus === endColumnStatus) {
+        // Reorder within the same column
+        const updates = newTasksState[startColumnStatus].map(task => ({ id: task.id, order: task.order }));
+        await supabase.from('tasks').upsert(updates);
+      } else {
+        // Update status and order for moved task, and reorder both columns
+        const movedTaskUpdate = { id: draggableId, status: endColumnStatus, order: destination.index };
+        const sourceColumnUpdates = newTasksState[startColumnStatus].map(task => ({ id: task.id, order: task.order }));
+        const destinationColumnUpdates = newTasksState[endColumnStatus].map(task => ({ id: task.id, order: task.order }));
 
-      // Add all tasks from the start column if it's different from the end column
-      // These tasks are from the optimistically updated newColumnsState
-      if (startColumn.id !== endColumn.id) {
-          newColumnsState[startColumn.id].tasks.forEach(task => {
-              if (!affectedTaskIds.has(task.id)) {
-                  finalTasksToUpsert.push({ ...task, updated_at: now });
-                  affectedTaskIds.add(task.id);
-              }
-          });
+        await supabase.from('tasks').upsert([movedTaskUpdate, ...sourceColumnUpdates, ...destinationColumnUpdates]);
       }
-
-      // Add all tasks from the end column
-      // These tasks are also from the optimistically updated newColumnsState
-      newColumnsState[endColumn.id].tasks.forEach(task => {
-          if (!affectedTaskIds.has(task.id)) {
-              finalTasksToUpsert.push({ ...task, updated_at: now });
-              affectedTaskIds.add(task.id);
-          }
-      });
-
-      // Ensure there are tasks to update before calling Supabase
-      if (finalTasksToUpsert.length > 0) {
-        // Log a summary of what's being sent, including title, to verify
-        console.log("Tasks to upsert:", JSON.stringify(finalTasksToUpsert.map(t => ({id: t.id, title: t.title, order: t.order, status: t.status, updated_at: t.updated_at})), null, 2));
-        
-        const { error: updateError } = await supabase
-          .from('tasks')
-          .upsert(finalTasksToUpsert, { onConflict: 'id' }); // Send full task objects
-
-        if (updateError) {
-          // Throw the Supabase error to be caught by the catch block
-          throw updateError;
-        }
+    } catch (err: unknown) {
+      console.error('Error updating task order/status:', err);
+      fetchTasks();
+      if (err instanceof Error) {
+        alert(`Error updating task: ${err.message}`);
+      } else {
+        alert('An unexpected error occurred.');
       }
-
-    } catch (e: any) {
-      console.error("Full error object during task update:", e); // Log the full error
-      let displayMessage = e.message || JSON.stringify(e);
-      if (displayMessage === '{}') {
-        displayMessage = "Received an empty error object from Supabase. Check console for details.";
-      }
-      setError(`Failed to update task order/status: ${displayMessage}`);
-      alert(`Failed to update task: ${displayMessage}. Please check the console for the full error object.`); // Added alert
     }
   };
 
   if (!isClient) {
-    // Render a placeholder or null on the server to avoid DND hydration errors
     return (
-        <div className="flex items-center justify-center h-[calc(100vh-200px)]">
-            <Loader2 className="h-8 w-8 animate-spin text-primary" />
-            <p className="ml-2 text-muted-foreground">Loading board...</p>
-        </div>
+      <div className="flex items-center justify-center h-[calc(100vh-200px)]">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <p className="ml-2 text-muted-foreground">Loading board...</p>
+      </div>
     );
   }
 
-  if (loading && !Object.values(columns).some(col => col.tasks.length > 0)) {
+  if (loading && Object.keys(tasks).length === 0) {
     return (
       <div className="flex items-center justify-center h-[calc(100vh-200px)]">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -293,116 +209,115 @@ export default function KanbanBoard() {
         <AlertCircle className="h-8 w-8 mb-2" />
         <p className="font-semibold">Error loading Kanban board</p>
         <p className="text-sm">{error}</p>
-        <Button variant="outline" onClick={fetchTasksAndProfiles} className="mt-4"> {/* Ensure this calls the correct fetch function */}
-            Try Reloading
+        <Button variant="outline" onClick={fetchTasks} className="mt-4">
+          Try Reloading
         </Button>
       </div>
     );
   }
 
-  // Create a map for quick profile lookup by full_name
   const profileMap = new Map(profiles.map(p => [p.full_name, p]));
 
   return (
     <div className="p-4 md:p-0">
       <div className="flex justify-between items-center mb-6">
-          <h1 className="text-3xl font-bold">Kanban Board</h1>
-          <Button asChild>
-              <Link href="/tasks/new">
-                    <PlusCircle className="mr-2 h-4 w-4" /> Create New Task
-              </Link>
-          </Button>
+        <h1 className="text-3xl font-bold">Kanban Board</h1>
+        <Button asChild>
+          <Link href="/tasks/new">
+            <PlusCircle className="mr-2 h-4 w-4" /> Create New Task
+          </Link>
+        </Button>
       </div>
       {error && (
-          <div className="mb-4 p-3 bg-destructive/10 text-destructive border border-destructive/50 rounded-md flex items-center">
-              <AlertCircle className="h-5 w-5 mr-2 flex-shrink-0" /> 
-              <p className="text-sm">{error}</p>
-          </div>
+        <div className="mb-4 p-3 bg-destructive/10 text-destructive border border-destructive/50 rounded-md flex items-center">
+          <AlertCircle className="h-5 w-5 mr-2 flex-shrink-0" />
+          <p className="text-sm">{error}</p>
+        </div>
       )}
       <DragDropContext onDragEnd={onDragEnd}>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
-          {Object.values(columns).map((column) => {
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
+          {Object.keys(tasks).map(status => {
+            const columnTasks = tasks[status] || [];
             return (
-              <Droppable key={column.id} droppableId={column.id}>
+              <Droppable key={status} droppableId={status}>
                 {(provided, snapshot) => (
-                <Card
-                  ref={provided.innerRef}
-                  {...provided.droppableProps}
-                  className={`flex flex-col min-h-[200px] transition-colors duration-200 ease-in-out 
+                  <Card
+                    ref={provided.innerRef}
+                    {...provided.droppableProps}
+                    className={`flex flex-col min-h-[200px] transition-colors duration-200 ease-in-out 
                               ${snapshot.isDraggingOver ? 'bg-primary/10' : 'bg-card'}`}
-                >
-                  <CardHeader className="border-b sticky top-0 bg-card z-10 py-3 px-4">
-                  <CardTitle className="text-lg flex items-center justify-between">
-                      {column.title}
-                      <span className="text-sm font-normal text-muted-foreground bg-muted px-2 py-0.5 rounded">
-                          {column.tasks.length}
-                      </span>
-                  </CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-2 space-y-2 flex-grow overflow-y-auto" style={{maxHeight: 'calc(100vh - 300px)'}}>
-                  {column.tasks.length === 0 && !snapshot.isDraggingOver && (
-                      <div className="text-center text-sm text-muted-foreground py-10">
-                        Drag tasks here or create new ones.
-                      </div>
-                  )}
-                  {column.tasks.map((task, index) => {
-                    const assigneeName = task.assignee || 'Unassigned';
-                    const assigneeProfile = profileMap.get(assigneeName);
-                    const avatarUrl = assigneeProfile?.avatar_url;
+                  >
+                    <CardHeader className="border-b sticky top-0 bg-card z-10 py-3 px-4">
+                      <CardTitle className="text-lg flex items-center justify-between">
+                        {status}
+                        <span className="text-sm font-normal text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                          {columnTasks.length}
+                        </span>
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-2 space-y-2 flex-grow overflow-y-auto" style={{ maxHeight: 'calc(100vh - 300px)' }}>
+                      {columnTasks.length === 0 && !snapshot.isDraggingOver && (
+                        <div className="text-center text-sm text-muted-foreground py-10">
+                          Drag tasks here or create new ones.
+                        </div>
+                      )}
+                      {columnTasks.map((task, index) => {
+                        const assigneeName = task.assignee || 'Unassigned';
+                        const assigneeProfile = profileMap.get(assigneeName);
+                        const avatarUrl = assigneeProfile?.avatar_url;
 
-                    return (
-                      <Draggable key={task.id} draggableId={task.id} index={index}>
-                        {(provided, snapshot) => (
-                          <Card
-                            ref={provided.innerRef}
-                            {...provided.draggableProps}
-                            
-                            className={`p-3 shadow-sm hover:shadow-md transition-shadow 
+                        return (
+                          <Draggable key={task.id} draggableId={task.id} index={index}>
+                            {(provided, snapshot) => (
+                              <Card
+                                ref={provided.innerRef}
+                                {...provided.draggableProps}
+                                className={`p-3 shadow-sm hover:shadow-md transition-shadow 
                                         ${snapshot.isDragging ? 'bg-primary/20 ring-2 ring-primary' : 'bg-card'}`}
-                          >
-                            <div className="flex justify-between items-start mb-2">
-                              <Link href={`/tasks/${task.id}`}>
-                                <span className="font-medium hover:underline text-sm leading-tight">
-                                  {task.title}
-                                </span>
-                              </Link>
-                              <div {...provided.dragHandleProps} className="ml-2 p-1 -mr-1 -mt-1 text-muted-foreground hover:text-foreground cursor-grab active:cursor-grabbing">
-                                  <GripVertical className="h-4 w-4" />
-                              </div>
-                            </div>
-                            
-                            {task.description && (
-                              <p className="text-xs text-muted-foreground mb-2 truncate">
-                                {task.description}
-                              </p>
-                            )}
+                              >
+                                <div className="flex justify-between items-start mb-2">
+                                  <Link href={`/tasks/${task.id}`}>
+                                    <span className="font-medium hover:underline text-sm leading-tight">
+                                      {task.title}
+                                    </span>
+                                  </Link>
+                                  <div {...provided.dragHandleProps} className="ml-2 p-1 -mr-1 -mt-1 text-muted-foreground hover:text-foreground cursor-grab active:cursor-grabbing">
+                                    <GripVertical className="h-4 w-4" />
+                                  </div>
+                                </div>
 
-                            <div className="flex items-center justify-between text-xs text-muted-foreground">
-                              <div className="flex items-center space-x-1">
-                                {getTypeIcon(task.type)}
-                                <Badge variant={task.type === 'Bug' ? 'destructive' : task.type === 'Feature' ? 'default' : 'secondary'} className="text-xs px-1.5 py-0.5">
-                                  {task.type}
-                                </Badge>
-                                <span className="font-mono text-[10px]">ID-{task.id.substring(0,4)}</span>
-                              </div>
-                              <Avatar className="h-6 w-6">
-                                <AvatarImage src={avatarUrl || `https://ui-avatars.com/api/?name=${assigneeName}&background=random&size=64`} />
-                                <AvatarFallback>{getInitials(assigneeName)}</AvatarFallback>
-                              </Avatar>
-                            </div>
-                          </Card>
-                        )}
-                      </Draggable>
-                    );
-                  })}
-                  {provided.placeholder}
-                  </CardContent>
-                </Card>
+                                {task.description && (
+                                  <p className="text-xs text-muted-foreground mb-2 truncate">
+                                    {task.description}
+                                  </p>
+                                )}
+
+                                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                  <div className="flex items-center space-x-1">
+                                    {getTypeIcon(task.type)}
+                                    <Badge variant={task.type === 'Bug' ? 'destructive' : task.type === 'Feature' ? 'default' : 'secondary'} className="text-xs px-1.5 py-0.5">
+                                      {task.type}
+                                    </Badge>
+                                    <span className="font-mono text-[10px]">ID-{task.id.substring(0, 4)}</span>
+                                  </div>
+                                  <Avatar className="h-6 w-6">
+                                    <AvatarImage src={avatarUrl || `https://ui-avatars.com/api/?name=${assigneeName}&background=random&size=64`} />
+                                    <AvatarFallback>{getInitials(assigneeName)}</AvatarFallback>
+                                  </Avatar>
+                                </div>
+                              </Card>
+                            )}
+                          </Draggable>
+                        );
+                      })}
+                      {provided.placeholder}
+                    </CardContent>
+                  </Card>
                 )}
               </Droppable>
             );
           })}
-      </div>
+        </div>
       </DragDropContext>
     </div>
   );
